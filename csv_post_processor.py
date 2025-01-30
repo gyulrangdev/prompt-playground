@@ -18,23 +18,7 @@ client = AzureOpenAI(
     api_version="2024-05-01-preview",
 )
 
-def process_text_with_gpt(title, content, index):
-    prompt = f"""
-    다음 게시글을 분석하여 정제된 형식으로 재작성하고 키워드를 추출해주세요.
-    
-    제목: {title}
-    내용: {content}
-    
-    다음 형식으로 출력해주세요:
-    재작성된 내용:
-    [재작성된 텍스트]
-    
-    키워드:
-    - [키워드1]
-    - [키워드2]
-    - [키워드3]
-    """
-
+def process_text_with_gpt(prompt, index):
     system_prompt = """
     게시글의 타이틀과 내용을 기반으로 핵심 정보를 파악하고, 이를 분석하기 쉽도록 정제된 말투로 재작성합니다. 또한 게시글의 주요 키워드도 함께 추출하여 제공합니다.  
 
@@ -105,12 +89,12 @@ def process_text_with_gpt(title, content, index):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4",  # 또는 사용 가능한 모델명
+            model=deployment,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=3000,
+            max_tokens=5000,
             temperature=0.7,
             top_p=0.95,
             frequency_penalty=0,
@@ -125,36 +109,69 @@ def process_text_with_gpt(title, content, index):
 
 def process_csv(input_file, output_file):
     # CSV 파일 읽기
-    df = pd.read_csv(input_file)
+    df = pd.read_csv(input_file,
+                encoding='utf-8',
+                quotechar='"',  # 따옴표 문자 지정
+                doublequote=True,  # 이중 따옴표 처리
+                lineterminator='\n'  # 줄바꿈 문자 지정
+                )
     
     # 결과를 저장할 새로운 컬럼 생성
     df['processed_content'] = ''
     df['keywords'] = ''
-    
-    # 각 행 처리
-    for index, row in df.iterrows():
-        if(index + 1 > 10): # 테스트로 10개만 처리
-            break
-        print(f"Processing row {index + 1}/{len(df)}")
+
+    # 첫 번째 배치 전에 파일 생성
+    df.to_csv(output_file, index=False, encoding='utf-8-sig')
+   
+    # 10개씩 배치 처리
+    batch_size = 10
+    for i in range(0, len(df), batch_size):
+        batch_end = min(i + batch_size, len(df))
+        print(f"Processing batch {i//batch_size + 1}: rows {i+1} to {batch_end}")
         
-        result = process_text_with_gpt(row['title'], row['content'], index)
+        # 배치의 입력 데이터 생성
+        input_data = ""
+        for j in range(i, batch_end):
+            input_data += f"{j+1}. Title: {df.iloc[j]['Title']}, Contents: {df.iloc[j]['Contents']}\n"
+        
+        # GPT 처리
+        result = process_text_with_gpt(input_data, i)
+        print(result)
+        
         if result:
-            # GPT 응답 파싱
+            # 각 항목별로 결과 파싱
             try:
-                content_part = result.split('키워드:')[0].replace('재작성된 내용:', '').strip()
-                keywords_part = result.split('키워드:')[1].strip()
+                # 번호로 결과 분리
+                entries = result.split('\n\n')
+                for entry_idx, entry in enumerate(entries):
+                    if not entry.strip():
+                        continue
+                    
+                    df_idx = i + entry_idx
+                    if df_idx >= len(df):
+                        break
+                        
+                    # 내용과 키워드 분리
+                    parts = entry.split('키워드:')
+                    if len(parts) == 2:
+                        content_part = parts[0].strip()
+                        # 번호 제거 (예: "1. " 제거)
+                        content_part = '.'.join(content_part.split('.')[1:]).strip()
+                        keywords_part = parts[1].strip()
+                        
+                        df.at[df_idx, 'processed_content'] = content_part
+                        df.at[df_idx, 'keywords'] = keywords_part
                 
-                df.at[index, 'processed_content'] = content_part
-                df.at[index, 'keywords'] = keywords_part
-            except:
-                print(f"Error parsing GPT response for row {index}")
+                # 각 배치 처리 후 바로 파일에 저장
+                df.to_csv(output_file, index=False, encoding='utf-8-sig')
+                print(f"Processing complete. Results saved to {output_file}")
+
+            except Exception as e:
+                print(f"Error parsing GPT response for batch starting at row {i}: {e}")
         
         # API 호출 제한을 위한 대기
         time.sleep(1)
     
-    # 결과를 새로운 CSV 파일로 저장
-    df.to_csv(output_file, index=False, encoding='utf-8-sig')
-    print(f"Processing complete. Results saved to {output_file}")
 
 # 사용 예시
 input_file = 'crawling_results.csv'  # 입력 CSV 파일 경로
