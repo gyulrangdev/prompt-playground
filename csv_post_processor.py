@@ -122,7 +122,9 @@ def process_csv(input_file, output_file):
 
     # 첫 번째 배치 전에 파일 생성
     df.to_csv(output_file, index=False, encoding='utf-8-sig')
-   
+
+    # 
+    # Processing batch 64: rows 631 to 640 부터 시작해야함
     # 10개씩 배치 처리
     batch_size = 10
     for i in range(0, len(df), batch_size):
